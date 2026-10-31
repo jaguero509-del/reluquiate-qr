@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#176b4d">
+<title>Reluquiate · Lector QR</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:#f2f6f3;color:#17251d;font:16px/1.45 Arial,sans-serif}
+main{max-width:560px;margin:0 auto;background:#fff;padding:18px;border-radius:18px;box-shadow:0 3px 16px #0001}
+h1{font-size:23px;margin:0 0 8px}
+p{color:#58685f}
+#reader{width:100%;margin:14px 0}
+#reader video{width:100%!important;max-height:60vh;object-fit:cover;border-radius:12px}
+.status{padding:12px;border-radius:10px;background:#edf3ef;margin:12px 0;white-space:pre-wrap}
+.good{background:#e2f5e8}.bad{background:#fde9e7}
+button{width:100%;padding:13px;border:0;border-radius:10px;margin-top:8px;font:inherit;font-weight:700;background:#176b4d;color:#fff}
+button.secondary{background:#e7efe9;color:#173b2d}
+input{width:100%;padding:13px;border:1px solid #cbd8d0;border-radius:10px;font:inherit}
+.small{font-size:13px}
+</style>
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+</head>
+<body>
+<main>
+  <h1>Reluquiate · Lector QR</h1>
+  <p>Apuntá la cámara trasera al código QR de la prenda. Al leerlo, el código volverá automáticamente a Reluquiate.</p>
+  <div id="status" class="status">Preparando la cámara…</div>
+  <div id="reader"></div>
+  <button id="stop" class="secondary" type="button">Detener cámara</button>
+  <div id="manual" hidden>
+    <p class="small">Si no se puede devolver el código automáticamente, podés copiarlo:</p>
+    <input id="code" readonly>
+    <button id="copy" type="button">Copiar código</button>
+    <button id="return" class="secondary" type="button">Volver a Reluquiate</button>
+  </div>
+</main>
+<script>
+'use strict';
+const statusEl=document.getElementById('status');
+const nonce=new URLSearchParams(location.search).get('nonce')||'';
+let scanner=null, scanning=false, finished=false;
+
+function status(text,ok){
+  statusEl.textContent=text;
+  statusEl.className='status '+(ok?'good':'bad');
+}
+function sendToParent(type,code){
+  if(!window.opener || window.opener.closed)return false;
+  window.opener.postMessage({type,code:code||'',nonce},'*');
+  return true;
+}
+async function stop(){
+  const current=scanner;
+  scanner=null;
+  scanning=false;
+  if(current){
+    try{if(current.isScanning)await current.stop();}catch(e){}
+    try{await current.clear();}catch(e){}
+  }
+}
+async function onDecoded(decodedText){
+  if(finished)return;
+  finished=true;
+  const code=String(decodedText||'').trim();
+  document.getElementById('code').value=code;
+  document.getElementById('manual').hidden=false;
+  status('Código leído: '+code+'. Enviándolo a Reluquiate…',true);
+  await stop();
+  const sent=sendToParent('RELUQUIATE_QR_RESULT',code);
+  if(sent){
+    status('¡Lectura correcta! El código fue enviado a Reluquiate. Ya podés volver a la pestaña anterior.',true);
+  }else{
+    status('Código leído, pero no se pudo conectar automáticamente con Reluquiate. Copiá el código y pegalo en la pantalla de entrega.',false);
+  }
+}
+async function start(){
+  if(!nonce){
+    status('Falta el código de conexión. Abrí este lector desde el botón Escanear de Reluquiate.',false);
+    document.getElementById('stop').hidden=true;
+    return;
+  }
+  if(!window.isSecureContext){
+    status('La cámara requiere una dirección HTTPS segura.',false);
+    return;
+  }
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+    status('Este navegador no ofrece acceso a la cámara. Actualizá Chrome o Safari.',false);
+    return;
+  }
+  if(typeof Html5Qrcode==='undefined'){
+    status('No se pudo cargar el lector QR. Comprobá la conexión a Internet y recargá la página.',false);
+    return;
+  }
+  try{
+    scanner=new Html5Qrcode('reader',{verbose:false,formatsToSupport:[Html5QrcodeSupportedFormats.QR_CODE]});
+    status('Solicitando permiso para utilizar la cámara…',true);
+    await scanner.start(
+      {facingMode:'environment'},
+      {fps:10,qrbox:(w,h)=>{const s=Math.floor(Math.min(w,h)*.72);return {width:Math.min(s,280),height:Math.min(s,280)};},aspectRatio:1.0,disableFlip:false},
+      onDecoded,
+      ()=>{}
+    );
+    scanning=true;
+    status('Cámara activa. Enfocá el QR de la prenda dentro del recuadro.',true);
+  }catch(e){
+    const detail=String(e&&e.message?e.message:e||'');
+    let message='No se pudo iniciar la cámara. Revisá los permisos de este sitio.';
+    if(/NotAllowedError|Permission denied|denied/i.test(detail))message='Permiso de cámara denegado. Permití la cámara para este sitio en Chrome o Safari y recargá.';
+    else if(/NotFoundError|DevicesNotFoundError/i.test(detail))message='No se encontró una cámara disponible en este dispositivo.';
+    else if(/NotReadableError|TrackStartError/i.test(detail))message='La cámara está siendo utilizada por otra aplicación. Cerrala y volvé a intentar.';
+    status(message,false);
+    await stop();
+  }
+}
+document.getElementById('stop').addEventListener('click',async()=>{
+  await stop();
+  status('Cámara detenida. Podés cerrar esta pestaña y volver a Reluquiate.',true);
+  sendToParent('RELUQUIATE_QR_CANCEL','');
+});
+document.getElementById('copy').addEventListener('click',async()=>{
+  const input=document.getElementById('code');
+  try{await navigator.clipboard.writeText(input.value);status('Código copiado. Volvé a Reluquiate y pegalo en el campo de prenda.',true);}
+  catch(e){input.select();status('Seleccioná y copiá el código manualmente.',false);}
+});
+document.getElementById('return').addEventListener('click',()=>{try{window.close();}catch(e){}});
+window.addEventListener('pagehide',()=>{stop();});
+start();
+</script>
+</body>
+</html>

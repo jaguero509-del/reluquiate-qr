@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<base target="_top">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Reluquiate · Entrega de prendas</title>
+<style>
+:root{color-scheme:light}
+*{box-sizing:border-box}
+body{font:16px/1.4 Arial,sans-serif;background:#f2f6f3;color:#17251d;margin:0;padding:12px}
+.card{max-width:600px;margin:auto;background:#fff;border-radius:18px;padding:18px;box-shadow:0 3px 16px #0001}
+h1{font-size:23px;line-height:1.2;margin:0 0 12px}
+h2{font-size:18px;margin:20px 0 8px}
+.muted{color:#58685f;font-size:13px}
+.step{background:#f5f8f6;border-radius:12px;padding:13px;margin:12px 0}
+.stepnum{display:inline-flex;align-items:center;justify-content:center;width:27px;height:27px;border-radius:50%;background:#dcece2;color:#18543a;font-weight:bold;margin-right:7px}
+label{display:block;font-weight:700;margin:10px 0 5px}
+input,select,textarea,button{font:inherit;width:100%;padding:13px;border:1px solid #cbd8d0;border-radius:10px;min-height:46px}
+button{border:0;background:#176b4d;color:#fff;font-weight:700;cursor:pointer;margin-top:8px}
+button.secondary{background:#e7efe9;color:#173b2d}
+button.warning{background:#9b5a00;color:#fff}
+button:disabled{opacity:.45;cursor:not-allowed}
+.row{display:flex;gap:8px;align-items:stretch}
+.row>*{min-width:0}
+.row input{flex:1}
+.row button{width:auto;min-width:105px}
+.status{padding:12px;border-radius:10px;background:#edf3ef;margin:10px 0;white-space:pre-wrap}
+.good{background:#e2f5e8}
+.bad{background:#fde9e7}
+.hidden{display:none!important}
+.price{font-size:25px;font-weight:700;margin:5px 0}
+.debt{font-size:22px;font-weight:700;color:#a52b24}
+.pill{display:inline-block;border-radius:99px;padding:4px 9px;background:#e9efeb;font-size:12px}
+.camera{width:100%;border-radius:12px;margin-top:8px;overflow:hidden}
+.footer{font-size:12px;color:#65746b;margin-top:14px}
+</style>
+</head>
+<body>
+<main class="card">
+<h1>Reluquiate · Entrega de prendas</h1>
+<div id="deviceInfo" class="status">Comprobando equipo autorizado…</div>
+<section id="activation" class="step hidden">
+  <h2>Activar este equipo</h2>
+  <p class="muted">Ingresá el código de un solo uso entregado por administración.</p>
+  <label for="activationCode">Código de activación</label>
+  <input id="activationCode" autocomplete="off">
+  <button onclick="activate()">Activar equipo</button>
+</section>
+<section id="operation" class="hidden">
+  <div class="step">
+    <h2><span class="stepnum">1</span>Identificar la prenda</h2>
+    <p class="muted">Podés escribir el código impreso junto al QR o abrir el lector de cámara en otra pestaña.</p>
+    <label for="itemCode">Código de prenda</label>
+    <div class="row">
+      <input id="itemCode" placeholder="Ej.: PRENDA-00001" autocomplete="off">
+      <button class="secondary" onclick="scanCamera()">Escanear</button>
+    </div>
+    <div id="cameraStatus" class="status hidden" role="status" aria-live="polite"></div>
+    <button id="stopScan" class="secondary hidden" onclick="closeReader()">Cerrar aviso de escaneo</button>
+    <button onclick="lookupItem()">Buscar prenda</button>
+    <div id="itemInfo" class="status hidden"></div>
+  </div>
+  <div class="step">
+    <h2><span class="stepnum">2</span>Elegir quién la recibe</h2>
+    <label for="participantSearch">Buscar participante por nombre o ID</label>
+    <input id="participantSearch" placeholder="Escribí apellido, nombre o ID" oninput="filterParticipants()" autocomplete="off">
+    <label for="participant">Seleccionar participante</label>
+    <select id="participant" size="4" onchange="updatePreview()"></select>
+    <div id="balanceInfo" class="status hidden"></div>
+  </div>
+  <div id="previewBox" class="step hidden">
+    <h2><span class="stepnum">3</span>Revisar entrega</h2>
+    <div id="previewText"></div>
+    <div id="debtStatus" class="status hidden"></div>
+    <div id="authorization" class="hidden">
+      <p><strong>Se necesita autorización del responsable</strong></p>
+      <p class="muted">El responsable asignado a este equipo debe autorizar expresamente esta excepción. El motivo quedará registrado.</p>
+      <label for="reason">Motivo de autorización</label>
+      <select id="reason" onchange="updateConfirmButton()">
+        <option value="">Seleccionar motivo…</option>
+        <option value="situacion_especial">Situación especial del usuario</option>
+        <option value="decision_responsable">Decisión del responsable de la franquicia</option>
+        <option value="campana_institucional">Campaña institucional</option>
+      </select>
+      <button id="authorizeBtn" class="warning" onclick="toggleAuthorization()">Autorizar saldo negativo</button>
+      <div id="authInfo" class="muted"></div>
+    </div>
+    <label for="observations">Observaciones (opcional)</label>
+    <textarea id="observations" rows="2" maxlength="300" placeholder="Detalle adicional, si hace falta"></textarea>
+    <button id="confirmBtn" onclick="confirmDelivery()" disabled>CONFIRMAR ENTREGA</button>
+    <button class="secondary" onclick="cancelOperation()">Cancelar / nueva prenda</button>
+  </div>
+  <div id="message" class="status hidden" role="status" aria-live="polite"></div>
+  <div class="footer">La operación se valida nuevamente en el servidor. El saldo negativo nunca puede superar el límite configurado por administración.</div>
+</section>
+</main>
+<script>
+'use strict';
+let token=localStorage.getItem('REL_V9_DEVICE_TOKEN')||'', item=null, participants=[], stream=null, policy={habilitado:true,limite:5}, policyReady=false, negativeAuthorized=false;
+const $=id=>document.getElementById(id);
+function msg(t,ok){$('message').textContent=t;$('message').className='status '+(ok?'good':'bad');$('message').classList.remove('hidden')}
+function run(name,args,ok,fail){const runner=google.script.run.withSuccessHandler(ok).withFailureHandler(e=>{if(fail)fail(e);else msg(e.message||String(e),false)});runner[name](...args)}
+function activate(){const c=$('activationCode').value.trim();if(!c)return msg('Ingresá el código de activación.',false);run('v9ActivarEquipo',[c],res=>{token=res.token;localStorage.setItem('REL_V9_DEVICE_TOKEN',token);start()})}
+function start(){if(!token){showActivation('Equipo sin activar.');return}policyReady=false;run('v9EstadoEquipo',[token],res=>{$('deviceInfo').textContent='Equipo autorizado: '+res.equipo.nombre+' · Franquicia '+res.equipo.franquicia+' · Responsable: '+res.equipo.responsable;$('activation').classList.add('hidden');$('operation').classList.remove('hidden');$('deviceInfo').textContent+=' · Cargando política de saldo…';run('v9ObtenerPoliticaSaldoNegativo',[token],cfg=>{policy={habilitado:cfg.habilitado===true,limite:Number(cfg.limite)};policyReady=true;$('deviceInfo').textContent='Equipo autorizado: '+res.equipo.nombre+' · Franquicia '+res.equipo.franquicia+' · Responsable: '+res.equipo.responsable;run('v9ListarParticipantes',[token],rows=>{participants=rows;filterParticipants()})},e=>{policyReady=false;msg('No se pudo leer la configuración de saldo negativo: '+(e.message||e),false)})},e=>{localStorage.removeItem('REL_V9_DEVICE_TOKEN');token='';showActivation('Equipo no autorizado o revocado. Solicitá activación al administrador.');})}
+function showActivation(text){$('deviceInfo').textContent=text;$('activation').classList.remove('hidden');$('operation').classList.add('hidden')}
+function filterParticipants(){const q=$('participantSearch').value.toLocaleLowerCase('es').trim();const s=$('participant');const previous=s.value;s.innerHTML='';const placeholder=document.createElement('option');placeholder.value='';placeholder.textContent='Seleccioná un participante…';placeholder.disabled=true;placeholder.selected=true;s.appendChild(placeholder);participants.filter(p=>(p.id+' '+p.nombre+' '+p.apellido+' '+p.tipo).toLocaleLowerCase('es').includes(q)).slice(0,60).forEach(p=>{const o=document.createElement('option');o.value=p.id;o.textContent=p.apellido+', '+p.nombre+' · saldo '+p.saldo+' EC · '+p.id;s.appendChild(o)});if(previous&&[...s.options].some(o=>o.value===previous))s.value=previous;else s.value='';updatePreview()}
+function lookupItem(){const id=$('itemCode').value.trim();if(!id)return msg('Escribí o escaneá el código de la prenda.',false);run('v9BuscarPrenda',[token,id],res=>{item=res.prenda;negativeAuthorized=false;$('itemInfo').classList.remove('hidden');$('itemInfo').textContent=item.tipoArticulo+' · '+item.descripcion+'\nCódigo: '+item.id+'\nCosto de retiro: '+item.precio+' ecomonedas';$('previewBox').classList.remove('hidden');updatePreview();$('message').classList.add('hidden')})}
+function selectedParticipant(){return participants.find(p=>p.id===$('participant').value)||null}
+function updatePreview(){const p=selectedParticipant();if(!policyReady){$('confirmBtn').disabled=true;if(item&&p){$('previewBox').classList.remove('hidden');$('previewText').textContent='Esperando la configuración de autorización…'}return}if(!item||!p){$('previewBox').classList.toggle('hidden',!item);$('confirmBtn').disabled=true;$('balanceInfo').classList.add('hidden');if(item)$('previewText').textContent='Elegí un participante para ver el saldo final.';return}const after=Number(p.saldo)-Number(item.precio);$('balanceInfo').classList.remove('hidden');$('balanceInfo').textContent='Saldo actual: '+p.saldo+' EC';$('previewText').textContent='Participante: '+p.nombre+' '+p.apellido+' ('+p.id+')\nPrenda: '+item.tipoArticulo+' — '+item.descripcion+'\nCosto: '+item.precio+' EC\nSaldo después de la entrega: '+after+' EC';const debt=$('debtStatus');const auth=$('authorization');if(after<0){auth.classList.remove('hidden');if(!policy.habilitado){debt.className='status bad';debt.textContent='Entrega bloqueada: la administración deshabilitó el saldo negativo.';negativeAuthorized=false;$('authorizeBtn').disabled=true}else if(after < -Number(policy.limite)){debt.className='status bad';debt.textContent='Entrega bloqueada: quedaría en '+after+' EC y el límite permitido es −'+policy.limite+' EC.';negativeAuthorized=false;$('authorizeBtn').disabled=true}else{debt.className='status';debt.textContent='Esta entrega deja saldo negativo, pero está dentro del límite de −'+policy.limite+' EC. Requiere autorización.';$('authorizeBtn').disabled=false}}else{auth.classList.add('hidden');debt.classList.add('hidden');negativeAuthorized=false}updateConfirmButton()}
+function toggleAuthorization(){if(!$('reason').value)return msg('Seleccioná primero el motivo de autorización.',false);negativeAuthorized=!negativeAuthorized;$('authorizeBtn').textContent=negativeAuthorized?'Autorización concedida · tocar para cancelar':'Autorizar saldo negativo';$('authorizeBtn').classList.toggle('secondary',negativeAuthorized);$('authInfo').textContent=negativeAuthorized?'El responsable de este equipo autoriza la excepción. Se registrará el motivo.':'';updateConfirmButton()}
+function updateConfirmButton(){
+  if(!policyReady){$('confirmBtn').disabled=true;return}
+  const p=selectedParticipant();
+  if(!item||!p){$('confirmBtn').disabled=true;return}
+  const after=Number(p.saldo)-Number(item.precio);
+  const blocked=after < -Number(policy.limite)||(!policy.habilitado&&after<0);
+  const needsAuth=after<0;
+  $('confirmBtn').disabled=blocked||(needsAuth&&(!negativeAuthorized||!$('reason').value));
+}
+function confirmDelivery(){if(!policyReady)return msg('Todavía no se cargó la política de saldo negativo. Esperá unos segundos.',false);const p=selectedParticipant();if(!item||!p)return msg('Primero identificá la prenda y seleccioná al participante.',false);const after=Number(p.saldo)-Number(item.precio);if(after<0&&(!negativeAuthorized||!$('reason').value))return msg('La entrega necesita autorización y un motivo.',false);if(after < -Number(policy.limite)||(!policy.habilitado&&after<0))return msg('La entrega supera la política de saldo negativo. No se registró.',false);if(!confirm('¿Confirmar entrega?\n\n'+item.tipoArticulo+' — '+item.descripcion+'\nPara: '+p.nombre+' '+p.apellido+'\nCosto: '+item.precio+' EC\nSaldo final: '+after+' EC'+(after<0?'\nAutorización: '+$('reason').selectedOptions[0].textContent:'')))return;const b=$('confirmBtn');b.disabled=true;run('v9ConfirmarEntrega',[token,item.id,p.id,$('observations').value,after<0&&negativeAuthorized,after<0?$('reason').value:''],res=>{msg(res.mensaje,true);cancelOperation();run('v9ListarParticipantes',[token],rows=>{participants=rows;filterParticipants()});run('v9ObtenerPoliticaSaldoNegativo',[token],cfg=>{policy=cfg})},e=>{b.disabled=false;msg(e.message||String(e),false)})}
+function cancelOperation(){item=null;negativeAuthorized=false;$('itemCode').value='';$('itemInfo').classList.add('hidden');$('previewBox').classList.add('hidden');$('authorization').classList.add('hidden');$('message').classList.add('hidden');$('observations').value='';$('reason').value='';$('authorizeBtn').textContent='Autorizar saldo negativo';$('authInfo').textContent='';$('confirmBtn').disabled=true;filterParticipants()}
+const QR_READER_URL='https://jaguero509-del.github.io/reluquiate-qr/';
+const QR_READER_ORIGIN='https://jaguero509-del.github.io';
+let qrWindow=null, qrNonce=null;
+
+function cameraMessage(text,ok){
+  const el=$('cameraStatus');
+  el.textContent=text;
+  el.className='status '+(ok?'good':'bad');
+  el.classList.remove('hidden');
+}
+
+function scanCamera(){
+  // Abrir la pestaña dentro del gesto del usuario evita bloqueos de ventanas emergentes.
+  if(!window.isSecureContext){
+    cameraMessage('Abrí Reluquiate desde su dirección HTTPS para utilizar el lector QR.',false);
+    return;
+  }
+  if(qrWindow && !qrWindow.closed){
+    cameraMessage('El lector QR ya está abierto. Cambiá a esa pestaña para escanear.',true);
+    try{qrWindow.focus();}catch(_){}
+    return;
+  }
+  qrNonce=(window.crypto && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : String(Date.now())+'-'+Math.random().toString(36).slice(2);
+  const url=QR_READER_URL+'?nonce='+encodeURIComponent(qrNonce);
+  qrWindow=window.open(url,'_blank');
+  if(!qrWindow){
+    cameraMessage('El navegador bloqueó la nueva pestaña. Permití ventanas emergentes para Reluquiate y volvé a tocar Escanear.',false);
+    return;
+  }
+  $('stopScan').classList.remove('hidden');
+  cameraMessage('Se abrió el lector QR en otra pestaña. Permití el acceso a la cámara y apuntá al código de la prenda.',true);
+}
+
+function closeReader(){
+  if(qrWindow && !qrWindow.closed){
+    try{qrWindow.close();}catch(_){}
+  }
+  qrWindow=null;
+  $('stopScan').classList.add('hidden');
+  cameraMessage('Podés volver a escanear cuando lo necesites o ingresar el código manualmente.',true);
+}
+
+window.addEventListener('message',event=>{
+  if(event.origin!==QR_READER_ORIGIN)return;
+  const data=event.data;
+  if(!data || data.type!=='RELUQUIATE_QR_RESULT' || !qrNonce || data.nonce!==qrNonce)return;
+  const code=String(data.code||'').trim();
+  if(!code)return;
+  $('itemCode').value=code;
+  cameraMessage('QR leído correctamente. Consultando la prenda…',true);
+  qrNonce=null;
+  if(qrWindow && !qrWindow.closed){
+    try{qrWindow.close();}catch(_){}
+  }
+  qrWindow=null;
+  $('stopScan').classList.add('hidden');
+  lookupItem();
+});
+
+window.addEventListener('message',event=>{
+  if(event.origin!==QR_READER_ORIGIN)return;
+  const data=event.data;
+  if(!data || data.type!=='RELUQUIATE_QR_CANCEL' || !qrNonce || data.nonce!==qrNonce)return;
+  qrNonce=null;
+  qrWindow=null;
+  $('stopScan').classList.add('hidden');
+  cameraMessage('Escaneo cancelado. Podés ingresar el código manualmente.',true);
+});
+
+start();
+</script>
+</body>
+</html>
